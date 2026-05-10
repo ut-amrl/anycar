@@ -47,11 +47,9 @@ class AltPurePursuitController:
 
         # remember to reset the indexes 
         if self.prev_index is None:
-            # get initial target point
             nearest_ind = self.calc_nearest_ind(xpos_x, xpos_y, path[:-1])
             self.prev_index = nearest_ind
             self.prev_target_pos = path[nearest_ind]
-            return path[nearest_ind]
 
         for i in range(math.floor(self.prev_index), min(math.ceil(self.prev_index) + search_window, pathlength-1)):
             currPoint = path[i]

@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import sys
 import numpy as np
 import pandas as pd
@@ -484,9 +485,11 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         state['rl_point'] = rl_point.item()
         state['gap'] = gap[0]
 
-        if self.enable_out_of_track_calculation:
+        state['out_of_track_ac'] = 1.0 if state['numberOfTyresOut'] > 2. else 0.0
+        if self.enable_out_of_track_calculation and hasattr(self.track, "track_occupancy_grid"):
             state['out_of_track_calc'] = 0.0 if self.track.track_occupancy_grid.is_inside_grid(point).item() > 0. else 1.0
-            state['out_of_track_ac'] = 1.0 if state['numberOfTyresOut'] > 2. else 0.0
+        else:
+            state['out_of_track_calc'] = state['out_of_track_ac']
 
         if self.use_ac_out_of_track:
             # get oot from AC. If more than two wheels are out of track, then the car is out of track
@@ -812,6 +815,9 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         self.track_file = os.path.join(self.tracks_path, self.track_config["track_file"])
         self.ref_lap_file = os.path.join(self.tracks_path, self.track_config["ref_lap_file"])
         self.track_grid_file = os.path.join(self.tracks_path, self.track_config["track_grid_file"])
+        if not Path(self.track_grid_file).exists():
+            logger.warning(f"Track grid file not found, using Assetto Corsa off-track state: {self.track_grid_file}")
+            self.track_grid_file = None
 
     def set_eval_mode(self):
         self.max_laps_number = self.config.eval_number_of_laps

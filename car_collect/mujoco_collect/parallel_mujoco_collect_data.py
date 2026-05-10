@@ -1,4 +1,5 @@
 from car_foundation import CAR_FOUNDATION_DATA_DIR
+import argparse
 import numpy as np
 import os
 import pickle
@@ -180,11 +181,19 @@ def rollout(id, simend, render, debug_plots, datadir):
 
 if __name__ == "__main__":
 
-    render = True
-    debug_plots = False
-    simend = 20000
-    episodes = 1
-    data_dir = os.path.join(CAR_FOUNDATION_DATA_DIR, "mujoco_sim_debugging")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--simend", type=int, default=20000)
+    parser.add_argument("--episodes", type=int, default=1)
+    parser.add_argument("--data-dir", type=str, default=None)
+    parser.add_argument("--no-render", action="store_true")
+    parser.add_argument("--debug-plots", action="store_true")
+    args = parser.parse_args()
+
+    render = not args.no_render
+    debug_plots = args.debug_plots
+    simend = args.simend
+    episodes = args.episodes
+    data_dir = args.data_dir or os.path.join(CAR_FOUNDATION_DATA_DIR, "mujoco_sim_debugging")
     os.makedirs(data_dir, exist_ok=True)
 
     num_success = 0
@@ -203,9 +212,10 @@ if __name__ == "__main__":
         assert(render == False and debug_plots == False)
         # Let's start Ray
         ray.init()
+        rollout_remote = ray.remote(rollout)
         ret = []
         for i in range(episodes):
-            ret.append(rollout.remote(i, simend, render, debug_plots, data_dir))
+            ret.append(rollout_remote.remote(i, simend, render, debug_plots, data_dir))
             print(f"Episode {i} Complete")
         output = ray.get(ret)
         # print(output)

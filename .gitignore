@@ -290,3 +290,6 @@ model_checkpoint*.zip
 car_ws/install
 car_ws/build
 car_ws/log
+
+third_party
+output

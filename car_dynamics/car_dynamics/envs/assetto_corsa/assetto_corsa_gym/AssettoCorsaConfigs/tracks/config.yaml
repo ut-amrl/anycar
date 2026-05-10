@@ -30,6 +30,14 @@ ks_red_bull_ring-layout_gp:
   ref_lap_file: ks_red_bull_ring-layout_gp-racing_line.csv
   TrackLength: 4286.78955078125
 
+imola:
+  track_name: imola
+  track_configuration:
+  track_file: imola.csv
+  track_grid_file: imola_0.1m.pkl
+  ref_lap_file: imola-racing_line.csv
+  TrackLength: 4864.107421875
+
 indianapolis_sp:
   track_name: indianapolis_sp
   track_configuration:
@@ -37,3 +45,11 @@ indianapolis_sp:
   track_grid_file: indianapolis_sp_0.1m.pkl
   ref_lap_file: indianapolis_sp-racing_line.csv
   TrackLength: 4066.004150390625
+
+ks_silverstone-international:
+  track_name: ks_silverstone
+  track_configuration: international
+  track_file: ks_silverstone-international.csv
+  track_grid_file: ks_silverstone-international_0.1m.pkl
+  ref_lap_file: ks_silverstone-international-racing_line.csv
+  TrackLength: 2945.103271484375

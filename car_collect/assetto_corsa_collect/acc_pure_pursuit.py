@@ -6,11 +6,13 @@ import pickle
 from scipy.spatial.transform import Rotation as R
 from scipy.interpolate import splprep, splev
 import matplotlib.pyplot as plt
-import ray
 import random
 import time
 import math
 import datetime
+import argparse
+import subprocess
+import atexit
 from tqdm import tqdm
 from car_dataset import CarDataset
 
@@ -25,6 +27,47 @@ from omegaconf import OmegaConf
 
 import faulthandler
 faulthandler.enable()
+
+STARTED_XBOXDRV = False
+
+def xboxdrv_running():
+    return subprocess.run(["pgrep", "-x", "xboxdrv"], stdout=subprocess.DEVNULL).returncode == 0
+
+def stop_started_xboxdrv():
+    if STARTED_XBOXDRV:
+        subprocess.run(["sudo", "-n", "pkill", "xboxdrv"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def ensure_xboxdrv():
+    global STARTED_XBOXDRV
+    if xboxdrv_running():
+        return
+    subprocess.run([
+        "sudo", "-b", "xboxdrv", "--daemon", "--silent", "--mimic-xpad",
+        "--type", "xbox360", "--dbus", "disabled",
+    ], check=True)
+    STARTED_XBOXDRV = True
+    atexit.register(stop_started_xboxdrv)
+    time.sleep(1.0)
+
+def find_xbox_event():
+    from evdev import InputDevice, list_devices
+
+    for path in list_devices():
+        device = InputDevice(path)
+        name = device.name.lower()
+        if "x-box 360" in name or "xbox 360" in name or "x-box" in name:
+            return path
+    raise RuntimeError("Could not find virtual Xbox controller. Is xboxdrv running?")
+
+def send_gear_up(device_path=None):
+    from evdev import InputDevice, ecodes
+
+    device = InputDevice(device_path or find_xbox_event())
+    device.write(ecodes.EV_KEY, ecodes.BTN_SOUTH, 1)
+    device.write(ecodes.EV_SYN, ecodes.SYN_REPORT, 0)
+    time.sleep(0.15)
+    device.write(ecodes.EV_KEY, ecodes.BTN_SOUTH, 0)
+    device.write(ecodes.EV_SYN, ecodes.SYN_REPORT, 0)
 
 def log_data(dataset, env, controller, action):
         dataset.data_logs["xpos_x"].append(env.state["world_position_x"])
@@ -58,7 +101,7 @@ def log_data(dataset, env, controller, action):
         dataset.data_logs["throttle"].append(action[0])
         dataset.data_logs["steer"].append(action[1])
 
-def rollout(id, simend, debug_plots, datadir):
+def rollout(id, simend, debug_plots, datadir, lower_vel, upper_vel, max_steering, lookahead, kp, kd, steer_sign, steer_gain, xbox_event, no_offtrack_termination):
     import logging
     logger = logging.getLogger(__name__)
     logging.basicConfig(
@@ -71,7 +114,11 @@ def rollout(id, simend, debug_plots, datadir):
 
     dataset = CarDataset()
     config = OmegaConf.load(os.path.join(ASSETTO_CORSA_ASSETS_DIR, "config.yml"))
+    if no_offtrack_termination:
+        config.AssettoCorsa.enable_out_of_track_termination = False
     env = assettoCorsa.make_ac_env(cfg=config, work_dir="output")
+    if hasattr(env, "env"):
+        env = env.env
 
     static_info = env.client.simulation_management.get_static_info()
     ac_mod_config = env.client.simulation_management.get_config()
@@ -84,6 +131,13 @@ def rollout(id, simend, debug_plots, datadir):
         logger.info(f"{i}: {ac_mod_config[i]}")
 
     env.reset()
+    env.client.controls.set_controls(steer=0, acc=-1, brake=-1, enable_gear_shift=True, shift_up=True)
+    env.client.respond_to_server()
+    time.sleep(0.2)
+    env.client.controls.set_controls(steer=0, acc=-1, brake=-1)
+    env.client.respond_to_server()
+    send_gear_up(xbox_event)
+    time.sleep(0.2)
 
     # set the simulator
     dataset.car_params["sim"] = "assetto_corsa_"+ env.car_name #env.name
@@ -110,18 +164,15 @@ def rollout(id, simend, debug_plots, datadir):
     ppcontrol = AltPurePursuitController({
         'wheelbase': dataset.car_params["wheelbase"], 
         'totaltime': simend,
-        'lowervel': 10, #actual min vel
-        'uppervel': 30., #actual max vel   
-        'max_steering': 0.61 #about 35 degrees  
+        'lowervel': lower_vel,
+        'uppervel': upper_vel,
+        'max_steering': max_steering,
     })
+    ppcontrol.lookahead_distance = lookahead
 
     controller = ppcontrol #all_controllers[np.random.choice([0, 1])]
     trajectory = np.array([env.ref_lap.df["pos_x"], env.ref_lap.df["pos_y"]]).T
 
-    # tuned kp and kd
-    kp = 1
-    kd = 0
-    
     last_err_vel = 0.
     is_terminate = False 
     clipped = 0
@@ -135,6 +186,7 @@ def rollout(id, simend, debug_plots, datadir):
             target_vel = action[0]
 
             action[0] = kp * (target_vel - env.lin_vel[0]) + kd * ((target_vel - env.lin_vel[0]) - last_err_vel)
+            action[1] = steer_sign * steer_gain * action[1]
             
             # print(action[0])
             vels.append(env.lin_vel[0])
@@ -156,8 +208,9 @@ def rollout(id, simend, debug_plots, datadir):
             is_terminate = True
             break
     
-    if not is_terminate:
-        # dataset.data_logs["lap_end"][-1] = 1 
+    if dataset.data_logs["xpos_x"]:
+        if is_terminate:
+            dataset.data_logs["lap_end"][-1] = 1
         now = datetime.datetime.now().isoformat(timespec='milliseconds')
         file_name = "log_" + str(id) + '_' + str(now) + ".pkl"
         filepath = os.path.join(datadir, file_name)
@@ -165,8 +218,8 @@ def rollout(id, simend, debug_plots, datadir):
         for key, value in dataset.data_logs.items():
             dataset.data_logs[key] = np.array(value)
 
-        # with open(filepath, 'wb') as outp: 
-        #     pickle.dump(dataset, outp, pickle.HIGHEST_PROTOCOL)
+        with open(filepath, 'wb') as outp: 
+            pickle.dump(dataset, outp, pickle.HIGHEST_PROTOCOL)
 
         print("Saved Data to:", filepath)
 
@@ -196,17 +249,46 @@ def rollout(id, simend, debug_plots, datadir):
 
 if __name__ == "__main__":
 
-    debug_plots = True
-    simend = 1000
-    episodes = 1
-    data_dir = os.path.join(CAR_FOUNDATION_DATA_DIR, "assetto_corsa_sim_debugging")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--simend", type=int, default=1000)
+    parser.add_argument("--episodes", type=int, default=1)
+    parser.add_argument("--data-dir", default=os.path.join(CAR_FOUNDATION_DATA_DIR, "assetto_corsa_sim_debugging"))
+    parser.add_argument("--lower-vel", type=float, default=3.0)
+    parser.add_argument("--upper-vel", type=float, default=8.0)
+    parser.add_argument("--max-steering", type=float, default=0.61)
+    parser.add_argument("--lookahead", type=float, default=8.0)
+    parser.add_argument("--kp", type=float, default=0.25)
+    parser.add_argument("--kd", type=float, default=0.0)
+    parser.add_argument("--steer-sign", type=float, choices=[-1.0, 1.0], default=1.0)
+    parser.add_argument("--steer-gain", type=float, default=1.0)
+    parser.add_argument("--debug-plots", action="store_true")
+    parser.add_argument("--xbox-event", default=None, help="Virtual Xbox event path, e.g. /dev/input/event21")
+    parser.add_argument("--no-start-xboxdrv", action="store_true")
+    parser.add_argument("--no-offtrack-termination", action="store_true",
+                        help="Disable episode termination when Assetto Corsa reports the car off track")
+    args = parser.parse_args()
+
+    if not args.no_start_xboxdrv:
+        ensure_xboxdrv()
+    xbox_event = args.xbox_event or find_xbox_event()
+    print(f"Using virtual Xbox controller: {xbox_event}")
+
+    debug_plots = args.debug_plots
+    simend = args.simend
+    episodes = args.episodes
+    data_dir = args.data_dir
     os.makedirs(data_dir, exist_ok=True)
 
     num_success = 0
     start = time.time()
     
     for i in range(episodes):
-        ret = rollout(i, simend, debug_plots, data_dir)
+        ret = rollout(
+            i, simend, debug_plots, data_dir,
+            args.lower_vel, args.upper_vel, args.max_steering, args.lookahead,
+            args.kp, args.kd, args.steer_sign, args.steer_gain, xbox_event,
+            args.no_offtrack_termination,
+        )
         print(f"Episode {i} Complete")
         if ret:
             num_success += 1

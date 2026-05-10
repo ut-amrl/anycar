@@ -124,14 +124,14 @@ def simulation_management_server_task():
                         track_export = track.export()
                         logger.info(type(track_export))
                         logger.info(len(track_export))
-                        cs.send(track.export().encode('utf8'))
+                        cs.sendall(track_export.encode('utf8'))
                         logger.info("Sending track info")
                     elif data == "get_static_info":
                         static_info.collect_static_info()
-                        cs.send(static_info.export().encode('utf8'))
+                        cs.sendall(static_info.export().encode('utf8'))
                         logger.info("Sending static info")
                     elif data == "get_config":
-                        cs.send(str(config.__dict__).encode('utf8'))
+                        cs.sendall(str(config.__dict__).encode('utf8'))
                         logger.info("Sending config")
                     else:
                         logger.info("[MGMT SERV] Unknown command: {}".format(data))
@@ -231,9 +231,8 @@ def acUpdate(deltaT):
     if not static_info.done_static_info:
         static_info.collect_static_info()
         telemetry.set_static_info(static_info.export())
-        return
 
-    if ac.ext_isAltPressed():
+    if hasattr(ac, "ext_isAltPressed") and ac.ext_isAltPressed():
         if ac.ext_isButtonPressed("W"):
             ac.ext_takeAStepBack() # same as reset
             logger.info("[MAIN] Step back.")

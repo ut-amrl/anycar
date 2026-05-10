@@ -24,10 +24,21 @@ class SimulationManagement:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.connect((self.host, self.port))
             s.sendall(message.encode())
-            s.settimeout(5)
             if wait_response:
-                data = s.recv(self.max_msg_size).decode()
-                return data
+                chunks = []
+                s.settimeout(5)
+                while True:
+                    try:
+                        chunk = s.recv(self.max_msg_size)
+                    except socket.timeout:
+                        if chunks:
+                            break
+                        raise
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    s.settimeout(0.2)
+                return b"".join(chunks).decode()
             else:
                 return None
 

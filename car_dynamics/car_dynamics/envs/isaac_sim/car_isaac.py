@@ -23,7 +23,12 @@ class IsaacCar(gym.Env):
         'usd_name': "F1Tenth_lecar.usd",
         'max_throttle': 0.05,
         'max_steer': 0.3,
-        'steer_bias': 0
+        'steer_bias': 0,
+        'camera_follow': True,
+        'camera_offset': [-3.0, -3.0, 3.0],
+        'camera_fixed_eye': [5.0, -7.0, 5.0],
+        'camera_fixed_target': [0.0, 0.0, 0.2],
+        'camera_target_height': 0.2,
     }
     print("here")
     from omni.isaac.kit import SimulationApp
@@ -98,7 +103,7 @@ class IsaacCar(gym.Env):
             
         for _ in range(self.delay):
             self.action_buffer.append(np.array([0., 0.], dtype=np.float32))
-            
+
         return self.obs_state()
     
     def reward(self):
@@ -141,6 +146,7 @@ class IsaacCar(gym.Env):
         for _ in range(self.hz//50):
             self.world.step(render = self.is_render)     
             self._step += 1
+        self._set_camera()
 
         reward = self.reward()
 
@@ -328,6 +334,22 @@ class IsaacCar(gym.Env):
         ori_z = float(orientation[3])
         rpy = R.from_quat(np.array([ori_x, ori_y, ori_z, ori_w])).as_euler("xyz")
         return rpy
+
+    def _set_camera(self):
+        if not self.is_render:
+            return
+        try:
+            from omni.isaac.core.utils.viewports import set_camera_view
+            if self.camera_follow:
+                pos = self.pose
+                eye = pos + np.array(self.camera_offset, dtype=float)
+                target = pos + np.array([0.0, 0.0, self.camera_target_height], dtype=float)
+            else:
+                eye = np.array(self.camera_fixed_eye, dtype=float)
+                target = np.array(self.camera_fixed_target, dtype=float)
+            set_camera_view(eye=eye, target=target)
+        except Exception:
+            pass
     
     def spawn_track(self, track):
         from omni.isaac.core.utils.stage import add_reference_to_stage, get_stage_units
@@ -412,7 +434,11 @@ class IsaacCar(gym.Env):
         self.pm = PhysicsMaterial(prim_path = "/World/F1Tenth/Rubber_Asphalt")
         # self.pm.set_dynamic_friction(0.00)
         # self.pm.set_static_friction(0.00)
-        plane = GroundPlane(prim_path="/World/GroundPlane", z_position=0)
+        plane = GroundPlane(
+            prim_path="/World/GroundPlane",
+            z_position=0,
+            color=np.array([0.0, 0.0, 0.0]),
+        )
         plane.apply_physics_material(self.pm)
         world.scene.add(plane)
     
@@ -427,10 +453,27 @@ class IsaacCar(gym.Env):
 
         world.initialize_physics()
 
+        self._add_lighting(world)
+
         world.play()
 
         return simulation_app, world, art_system
-    
+
+    def _add_lighting(self, world):
+        try:
+            from pxr import Gf, UsdLux
+            stage = world.stage
+
+            dome = UsdLux.DomeLight.Define(stage, "/World/DomeLight")
+            dome.CreateIntensityAttr(5000.0)
+
+            sun = UsdLux.DistantLight.Define(stage, "/World/SunLight")
+            sun.CreateIntensityAttr(10000.0)
+            sun.CreateAngleAttr(0.5)
+            sun.AddRotateXYZOp().Set(Gf.Vec3f(-45.0, 0.0, 35.0))
+        except Exception:
+            pass
+
     def warmup_sim(self):
         warmupsteps = 200
         for _ in range(warmupsteps):

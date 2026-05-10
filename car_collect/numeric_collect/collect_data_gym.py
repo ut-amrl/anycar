@@ -1,5 +1,5 @@
 import os
-import ray
+import argparse
 import time
 import pickle
 import datetime
@@ -21,8 +21,6 @@ CONSTANT_VEL = False
 
 data_folder_prefix = datetime.datetime.now().isoformat(timespec='milliseconds')
 
-
-ray.init(local_mode=DEBUG)
 
 def show_debug_plots(dataset):
     plt.plot(dataset.data_logs["traj_x"], dataset.data_logs["traj_y"], label='reference')
@@ -73,7 +71,6 @@ def log_data(dataset: CarDataset, env: Car2D, action, controller):
         dataset.data_logs["throttle"].append(action[0])
         dataset.data_logs["steer"].append(action[1])
 
-@ray.remote   
 def rollout(params):
     id, time_steps, debug_plots, datadir = params
     tic = time.time()
@@ -235,16 +232,25 @@ def rollout(params):
     print("Total Laps", rollout_counter*25)
 
 if __name__ == "__main__":
-    
-    simend = 2000
-    episodes = 1
 
-    data_dir = os.path.join(CAR_FOUNDATION_DATA_DIR, f'{data_folder_prefix}-numeric_sim')
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--simend", type=int, default=2000)
+    parser.add_argument("--episodes", type=int, default=1)
+    parser.add_argument("--data-dir", type=str, default=None)
+    args = parser.parse_args()
+
+    simend = args.simend
+    episodes = args.episodes
+
+    data_dir = args.data_dir or os.path.join(CAR_FOUNDATION_DATA_DIR, f'{data_folder_prefix}-numeric_sim')
 
     os.makedirs(data_dir, exist_ok=True)
-    
-    if not DEBUG:
-        futures = [rollout.remote((i, simend, DEBUG, data_dir)) for i in range(episodes)]
+
+    if not DEBUG and episodes > 1:
+        import ray
+        ray.init(local_mode=DEBUG)
+        rollout_remote = ray.remote(rollout)
+        futures = [rollout_remote.remote((i, simend, DEBUG, data_dir)) for i in range(episodes)]
         done = [] 
         # Function to track progress
         def track_progress(futures):
@@ -261,6 +267,6 @@ if __name__ == "__main__":
         # Collect the results from workers
         results = ray.get(futures + done)
     else:
-        for i in range(1):
+        for i in range(episodes):
             rollout((i, simend, DEBUG, data_dir))
             print(f"Episode {i} Complete")

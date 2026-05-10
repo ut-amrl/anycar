@@ -1,4 +1,5 @@
 from car_foundation import CAR_FOUNDATION_DATA_DIR
+import argparse
 import numpy as np
 import os
 import pickle
@@ -101,7 +102,7 @@ def rollout(id, simend, render, debug_plots, datadir, env):
     # trajectory = change_track(scale, direction)
     trajectory = change_track_feasible(scale, direction, default_size=10)
     
-    env.spawn_track(trajectory)
+    # env.spawn_track(trajectory)
     
     kp = np.random.uniform(0.5, 1.5)
     kd = np.random.uniform(0.01, 0.1)
@@ -175,11 +176,19 @@ def rollout(id, simend, render, debug_plots, datadir, env):
 
 if __name__ == "__main__":
 
-    render = True
-    debug_plots = False
-    simend = 2000 #1250 for 25 seconds of driving
-    episodes = 1
-    data_dir = os.path.join(CAR_FOUNDATION_DATA_DIR, "isaac_sim_trash")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--simend", type=int, default=2000)
+    parser.add_argument("--episodes", type=int, default=1)
+    parser.add_argument("--data-dir", type=str, default=None)
+    parser.add_argument("--no-render", action="store_true")
+    parser.add_argument("--debug-plots", action="store_true")
+    args = parser.parse_args()
+
+    render = not args.no_render
+    debug_plots = args.debug_plots
+    simend = args.simend #1250 for 25 seconds of driving
+    episodes = args.episodes
+    data_dir = args.data_dir or os.path.join(CAR_FOUNDATION_DATA_DIR, "isaac_sim_trash")
     os.makedirs(data_dir, exist_ok=True)
     num_success = 0
     env = IsaacCar({'is_render': render})

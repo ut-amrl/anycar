@@ -64,15 +64,15 @@ AssettoCorsa:
   enable_out_of_track_termination: True
   enable_low_speed_termination: False
   recover_car_on_done: False
-  send_reset_at_start: True
+  send_reset_at_start: False
   record_controls_from_client: False
   enable_out_of_track_penalty: False
   max_laps_number: null
   enable_task_id_in_obs: False
   penalize_actions_diff: False
   penalize_actions_diff_coef: 0.1
-  track: "ks_red_bull_ring-layout_gp"  # monza ks_barcelona-layout_gp ks_red_bull_ring-layout_gp, indianapolis_sp, ks_silverstone-gp
-  car: "dallara_f317"              # dallara_f317, ks_mazda_miata, bmw_z4_gt3
+  track: "ks_silverstone-international"  # monza ks_barcelona-layout_gp ks_red_bull_ring-layout_gp, indianapolis_sp, ks_silverstone-gp, ks_silverstone-international, imola
+  car: "ks_mazda_miati"              # dallara_f317, ks_mazda_miata, bmw_z4_gt3, ks_alfa_33_stradale
   use_ac_out_of_track: True
   add_previous_obs_to_state: True
   use_reference_line_in_reward: True

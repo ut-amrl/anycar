@@ -1,16 +1,10 @@
 setup.py
-assets/dvij.csv
-assets/raceline_tum.csv
-assets/track.csv
-assets/track1.csv
-assets/track_10.csv
 car_planner/__init__.py
 car_planner/fast_spline_trajectory_generation.py
 car_planner/global_trajectory.py
 car_planner/jax_utils.py
-car_planner/track.csv
-car_planner/track2.csv
 car_planner/track_generation.py
+car_planner/track_generation_realistic.py
 car_planner/utils.py
 car_planner.egg-info/PKG-INFO
 car_planner.egg-info/SOURCES.txt
