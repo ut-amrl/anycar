@@ -135,10 +135,10 @@ class MuJoCoCar(gym.Env):
     # generate a new mass
     def generate_new_mass(self):   
         # print("[Warn] Car Mass Generation Not Defined for Simulator Type")
-        default_mass = 3.794137 # base mujoco mass
+        # default_mass = 3.794137 # base mujoco mass
         
-        lower = default_mass * 0.7
-        upper = default_mass * 1.3
+        lower = 1.0
+        upper = 15.0
         new_mass = np.random.uniform(lower, upper)
 
         return new_mass
@@ -158,7 +158,7 @@ class MuJoCoCar(gym.Env):
 
         default_friction = 1. #base mujoco friction
         lower = default_friction * 0.5
-        upper = default_friction * 1.1
+        upper = default_friction * 1.5
         friction = np.random.uniform(lower, upper)
         new_friction = np.array([friction, 0.005, 0.0001]) #static, torsional, rolling         
 
@@ -173,14 +173,14 @@ class MuJoCoCar(gym.Env):
     def generate_new_max_throttle(self):
         # print("[Warn] Max Throttle Generation Not Defined for Simulator Type")
         lower = 2
-        upper = 8
+        upper = 10
         max_thr = np.random.uniform(lower, upper)
         return max_thr
     
     def generate_new_max_steering(self):
         # print("[Warn] Max Steering Generation Not Defined for Simulator Type")
         lower = 0.15
-        upper = 0.36
+        upper = 0.5
         max_steer = np.random.uniform(lower, upper)
         return max_steer
         # clip steering at random value
@@ -189,7 +189,7 @@ class MuJoCoCar(gym.Env):
         
     def generate_new_steering_bias(self):
         lower = 0.0
-        upper = 0.01
+        upper = 0.03
         bias = np.random.uniform(lower, upper)
         return bias
         

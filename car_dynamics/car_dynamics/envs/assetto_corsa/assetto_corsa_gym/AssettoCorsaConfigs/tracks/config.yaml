@@ -53,3 +53,19 @@ ks_silverstone-international:
   track_grid_file: ks_silverstone-international_0.1m.pkl
   ref_lap_file: ks_silverstone-international-racing_line.csv
   TrackLength: 2945.103271484375
+
+ks_nurburgring-layout_gp_b:
+  track_name: ks_nurburgring
+  track_configuration: layout_gp_b
+  track_file: ks_nurburgring-layout_gp_b.csv
+  track_grid_file: ks_nurburgring-layout_gp_b_0.1m.pkl
+  ref_lap_file: ks_nurburgring-layout_gp_b-racing_line.csv
+  TrackLength: 5067.3388671875
+
+spa:
+  track_name: spa
+  track_configuration: 
+  track_file: spa.csv
+  track_grid_file: spa_0.1m.pkl
+  ref_lap_file: spa-racing_line.csv
+  TrackLength: 6946.0615234375

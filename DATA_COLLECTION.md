@@ -78,26 +78,51 @@ Commands assume repo root.
    ./omni.isaac.sim.post.install.sh
    ```
 
-2. Test Isaac Sim Python.
+2. Configure the `anycar_is` conda environment to use Isaac Sim with plain `python3`.
+
+   These commands assume Isaac Sim is installed at `~/.local/share/ov/pkg/isaac-sim-2023.1.1`.
 
    ```bash
-   ~/.local/share/ov/pkg/isaac-sim-2023.1.1/python.sh -c "from omni.isaac.kit import SimulationApp; app = SimulationApp({'headless': True}); app.close()"
+   conda create -n anycar_is python=3.10 -y
+   conda activate anycar_is
+
+   python -m pip install --upgrade pip
+   python -m pip install -r requirements.txt
+
+   ISAAC_SIM_PATH="$HOME/.local/share/ov/pkg/isaac-sim-2023.1.1"
+
+   conda env config vars set -n anycar_is \
+     CARB_APP_PATH="$ISAAC_SIM_PATH/kit" \
+     ISAAC_PATH="$ISAAC_SIM_PATH" \
+     EXP_PATH="$ISAAC_SIM_PATH/apps" \
+     PYTHONPATH="$ISAAC_SIM_PATH/exts/omni.isaac.kit:$ISAAC_SIM_PATH/exts/omni.isaac.gym:$ISAAC_SIM_PATH/kit/kernel/py:$ISAAC_SIM_PATH/kit/plugins/bindings-python:$ISAAC_SIM_PATH/exts/omni.isaac.lula/pip_prebundle:$ISAAC_SIM_PATH/exts/omni.exporter.urdf/pip_prebundle:$ISAAC_SIM_PATH/kit/exts/omni.kit.pip_archive/pip_prebundle:$ISAAC_SIM_PATH/exts/omni.isaac.core_archive/pip_prebundle:$ISAAC_SIM_PATH/exts/omni.isaac.ml_archive/pip_prebundle:$ISAAC_SIM_PATH/exts/omni.pip.compute/pip_prebundle:$ISAAC_SIM_PATH/exts/omni.pip.cloud/pip_prebundle:$ISAAC_SIM_PATH/extscache/omni.pip.torch-2_0_1-2.0.2+105.1.lx64/torch-2-0-1:$ISAAC_SIM_PATH/kit/python/lib/python3.10/site-packages" \
+     LD_LIBRARY_PATH="$ISAAC_SIM_PATH:$ISAAC_SIM_PATH/exts/omni.usd.schema.isaac/plugins/IsaacSensorSchema/lib:$ISAAC_SIM_PATH/exts/omni.usd.schema.isaac/plugins/RangeSensorSchema/lib:$ISAAC_SIM_PATH/exts/omni.isaac.lula/pip_prebundle:$ISAAC_SIM_PATH/exts/omni.exporter.urdf/pip_prebundle:$ISAAC_SIM_PATH/kit:$ISAAC_SIM_PATH/kit/kernel/plugins:$ISAAC_SIM_PATH/kit/libs/iray:$ISAAC_SIM_PATH/kit/plugins:$ISAAC_SIM_PATH/kit/plugins/bindings-python:$ISAAC_SIM_PATH/kit/plugins/carb_gfx:$ISAAC_SIM_PATH/kit/plugins/rtx:$ISAAC_SIM_PATH/kit/plugins/gpu.foundation"
    ```
 
-3. Install repo dependencies into Isaac Sim Python.
+   Reactivate the env so conda applies the configured variables:
 
    ```bash
-   cd /home/rwik/research/jumpracing/anycar
-   ~/.local/share/ov/pkg/isaac-sim-2023.1.1/python.sh -m pip install --upgrade pip
-   ~/.local/share/ov/pkg/isaac-sim-2023.1.1/python.sh -m pip install setuptools==65.5.0 wheel==0.38.4
-   ~/.local/share/ov/pkg/isaac-sim-2023.1.1/python.sh -m pip install -r requirements.txt
+   conda deactivate
+   conda activate anycar_is
+   ```
+
+3. Test Isaac Sim with conda `python3`.
+
+   ```bash
+   python3 -c "from omni.isaac.kit import SimulationApp; app = SimulationApp({'headless': True}); app.close()"
    ```
 
 4. Run the Isaac Sim collector.
 
    ```bash
    cd /home/rwik/research/jumpracing/anycar
-   ~/.local/share/ov/pkg/isaac-sim-2023.1.1/python.sh car_collect/isaacsim_collect/isaacsim_collect_data.py --simend 2000 --episodes 1
+   python3 car_collect/isaacsim_collect/isaacsim_collect_data.py --episodes 1
+   ```
+
+   For headless data collection:
+
+   ```bash
+   python3 car_collect/isaacsim_collect/isaacsim_collect_data.py --headless --episodes 1
    ```
 
 5. Output:
@@ -106,9 +131,64 @@ Commands assume repo root.
    car_foundation/car_foundation/data/isaac_sim_trash/
    ```
 
-6. Optional: `--data-dir /path/to/output --no-render --debug-plots`
+6. Optional: `--data-dir /path/to/output --no-render --debug-plots --camera-offset -3 -3 3`
 
-## 5. Assetto Corsa Linux Collection
+## 5. Isaac Lab Parallel Collection
+
+This uses the newer Isaac Lab install in `anycar_lab` and runs multiple F1Tenth cars in one Isaac Lab process.
+
+```bash
+conda activate anycar_lab
+cd /home/rwik/research/jumpracing/anycar
+
+python3 car_collect/isaaclab_collect/parallel_isaaclab_collect_data.py \
+  --headless \
+  --num-envs 64 \
+  --episodes 10 \
+  --simend 2000
+```
+
+Output defaults to:
+
+```text
+car_foundation/car_foundation/data/isaaclab_sim_debugging/
+```
+
+Each environment writes one raw float32 `.bin` per episode. Rows are 15D:
+
+```text
+pos(3), quat_wxyz(4), vel_world(3), angvel_world(3), throttle, steer
+```
+
+Optional useful args:
+
+```bash
+--data-dir /path/to/output
+--num-envs 128
+--device cuda:0
+--usd-name F1Tenth_lecar.usd
+--seed 3
+--dt 0.02
+--physics-dt 0.01
+--env-spacing 0
+--max-throttle 1.0
+--ground-static-friction 1.5
+--ground-dynamic-friction 1.5
+--wheel-static-friction 1.5
+--wheel-dynamic-friction 1.5
+--speed-filter-alpha 0.25
+--action-filter-alpha 0.25
+--lower-vel 0.7
+--upper-vel 2.0
+--min-track-scale 1
+--max-track-scale 5
+--min-kp 6.0
+--max-kp 10.0
+--min-kd 0.5
+--max-kd 1.5
+```
+
+## 6. Assetto Corsa Linux Collection
 
 This uses a separate env:
 

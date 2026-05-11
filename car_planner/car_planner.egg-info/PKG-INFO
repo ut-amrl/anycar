@@ -1,6 +1,14 @@
-Metadata-Version: 2.1
-Name: car-planner
+Metadata-Version: 2.4
+Name: car_planner
 Version: 0.0.1
 Summary: car planner
 Author: Haoru Xue
 Author-email: haorux@andrew.cmu.edu
+Requires-Dist: numpy
+Requires-Dist: casadi
+Requires-Dist: scipy
+Requires-Dist: jax-cosmo
+Dynamic: author
+Dynamic: author-email
+Dynamic: requires-dist
+Dynamic: summary

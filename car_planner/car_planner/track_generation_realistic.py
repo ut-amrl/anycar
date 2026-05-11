@@ -4,7 +4,6 @@ from scipy.spatial import ConvexHull
 from scipy.interpolate import splprep, splev
 import random
 import math
-import pandas as pd
 
 
 def change_track_feasible(scale:int = 1, direction = 1,  default_size = 4):

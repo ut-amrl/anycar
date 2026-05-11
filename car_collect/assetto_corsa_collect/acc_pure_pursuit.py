@@ -2,7 +2,6 @@ from car_foundation import CAR_FOUNDATION_DATA_DIR
 from car_dynamics import ASSETTO_CORSA_ASSETS_DIR
 import numpy as np
 import os
-import pickle
 from scipy.spatial.transform import Rotation as R
 from scipy.interpolate import splprep, splev
 import matplotlib.pyplot as plt
@@ -29,6 +28,13 @@ import faulthandler
 faulthandler.enable()
 
 STARTED_XBOXDRV = False
+BIN_COLUMNS = [
+    "pos_x", "pos_y", "pos_z",
+    "quat_w", "quat_x", "quat_y", "quat_z",
+    "vel_x", "vel_y", "vel_z",
+    "angvel_x", "angvel_y", "angvel_z",
+    "throttle", "steer",
+]
 
 def xboxdrv_running():
     return subprocess.run(["pgrep", "-x", "xboxdrv"], stdout=subprocess.DEVNULL).returncode == 0
@@ -69,6 +75,42 @@ def send_gear_up(device_path=None):
     device.write(ecodes.EV_KEY, ecodes.BTN_SOUTH, 0)
     device.write(ecodes.EV_SYN, ecodes.SYN_REPORT, 0)
 
+def get_next_bin_path(output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    existing = []
+    for name in os.listdir(output_dir):
+        stem, ext = os.path.splitext(name)
+        if ext == ".bin" and stem.isdigit():
+            existing.append(int(stem))
+    next_idx = max(existing, default=-1) + 1
+    return os.path.join(output_dir, f"{next_idx:06d}.bin")
+
+def dataset_to_bin_array(dataset):
+    logs = dataset.data_logs
+    arr = np.column_stack([
+        logs["xpos_x"],
+        logs["xpos_y"],
+        logs["xpos_z"],
+        logs["xori_w"],
+        logs["xori_x"],
+        logs["xori_y"],
+        logs["xori_z"],
+        logs["xvel_x"],
+        logs["xvel_y"],
+        logs["xvel_z"],
+        logs["avel_x"],
+        logs["avel_y"],
+        logs["avel_z"],
+        logs["throttle"],
+        logs["steer"],
+    ]).astype(np.float32, copy=False)
+    assert arr.shape[1] == len(BIN_COLUMNS), arr.shape
+    return arr
+
+def rotate_body_to_world(quat_wxyz, vec_body):
+    quat_xyzw = [quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]]
+    return R.from_quat(quat_xyzw).apply(vec_body)
+
 def log_data(dataset, env, controller, action):
         dataset.data_logs["xpos_x"].append(env.state["world_position_x"])
         dataset.data_logs["xpos_y"].append(env.state["world_position_y"])
@@ -76,22 +118,35 @@ def log_data(dataset, env, controller, action):
         #log orientation
         roll, pitch, yaw = env.state["roll"], env.state["pitch"], env.state["yaw"]
         quat = R.from_euler("xyz", [roll, pitch, yaw]).as_quat()
-        dataset.data_logs["xori_w"].append(quat[3])
-        dataset.data_logs["xori_x"].append(quat[0])
-        dataset.data_logs["xori_y"].append(quat[1])
-        dataset.data_logs["xori_z"].append(quat[2])
+        quat_wxyz = np.array([quat[3], quat[0], quat[1], quat[2]])
+        dataset.data_logs["xori_w"].append(quat_wxyz[0])
+        dataset.data_logs["xori_x"].append(quat_wxyz[1])
+        dataset.data_logs["xori_y"].append(quat_wxyz[2])
+        dataset.data_logs["xori_z"].append(quat_wxyz[3])
         #log linear velocity
-        dataset.data_logs["xvel_x"].append(env.state["local_velocity_x"])
-        dataset.data_logs["xvel_y"].append(env.state["local_velocity_y"])
-        dataset.data_logs["xvel_z"].append(env.state["local_velocity_z"])
+        local_vel = np.array([
+            env.state["local_velocity_x"],
+            env.state["local_velocity_y"],
+            env.state["local_velocity_z"],
+        ])
+        world_vel = rotate_body_to_world(quat_wxyz, local_vel)
+        dataset.data_logs["xvel_x"].append(world_vel[0])
+        dataset.data_logs["xvel_y"].append(world_vel[1])
+        dataset.data_logs["xvel_z"].append(world_vel[2])
         #log linear acceleration
         dataset.data_logs["xacc_x"].append(env.state["accelX"])
         dataset.data_logs["xacc_y"].append(env.state["accelY"])
         dataset.data_logs["xacc_z"].append(0)
         #log angular velocity
-        dataset.data_logs["avel_x"].append(env.state["angular_velocity_x"])
-        dataset.data_logs["avel_y"].append(env.state["angular_velocity_y"])  
-        dataset.data_logs["avel_z"].append(env.state["angular_velocity_z"])
+        local_ang_vel = np.array([
+            env.state["angular_velocity_x"],
+            env.state["angular_velocity_y"],
+            env.state["angular_velocity_z"],
+        ])
+        world_ang_vel = rotate_body_to_world(quat_wxyz, local_ang_vel)
+        dataset.data_logs["avel_x"].append(world_ang_vel[0])
+        dataset.data_logs["avel_y"].append(world_ang_vel[1])  
+        dataset.data_logs["avel_z"].append(world_ang_vel[2])
 
         dataset.data_logs["traj_x"].append(controller.target_pos[0])
         dataset.data_logs["traj_y"].append(controller.target_pos[1])
@@ -99,7 +154,7 @@ def log_data(dataset, env, controller, action):
         dataset.data_logs["lap_end"].append(0)
 
         dataset.data_logs["throttle"].append(action[0])
-        dataset.data_logs["steer"].append(action[1])
+        dataset.data_logs["steer"].append(action[1] * controller.max_steering)
 
 def rollout(id, simend, debug_plots, datadir, lower_vel, upper_vel, max_steering, lookahead, kp, kd, steer_sign, steer_gain, xbox_event, no_offtrack_termination):
     import logging
@@ -211,17 +266,12 @@ def rollout(id, simend, debug_plots, datadir, lower_vel, upper_vel, max_steering
     if dataset.data_logs["xpos_x"]:
         if is_terminate:
             dataset.data_logs["lap_end"][-1] = 1
-        now = datetime.datetime.now().isoformat(timespec='milliseconds')
-        file_name = "log_" + str(id) + '_' + str(now) + ".pkl"
-        filepath = os.path.join(datadir, file_name)
-        
-        for key, value in dataset.data_logs.items():
-            dataset.data_logs[key] = np.array(value)
-
-        with open(filepath, 'wb') as outp: 
-            pickle.dump(dataset, outp, pickle.HIGHEST_PROTOCOL)
-
+        output_dir = os.path.join(datadir, env.track_name, env.car_name)
+        filepath = get_next_bin_path(output_dir)
+        bin_data = dataset_to_bin_array(dataset)
+        bin_data.tofile(filepath)
         print("Saved Data to:", filepath)
+        print("Bin shape:", bin_data.shape, "columns:", BIN_COLUMNS)
 
     if debug_plots:
         actions = np.array(actions)

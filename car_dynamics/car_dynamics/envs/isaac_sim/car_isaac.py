@@ -30,9 +30,11 @@ class IsaacCar(gym.Env):
         'camera_fixed_target': [0.0, 0.0, 0.2],
         'camera_target_height': 0.2,
     }
-    print("here")
     from omni.isaac.kit import SimulationApp
-    simulation_app = SimulationApp({"headless": False, "fast_shutdown": True}) # we can also run as headless.
+    simulation_app = SimulationApp({
+        "headless": os.environ.get("ANYCAR_ISAAC_HEADLESS", "0") == "1",
+        "fast_shutdown": True,
+    })
     simulation_app.update()
     simulation_app.update()
 
@@ -65,6 +67,18 @@ class IsaacCar(gym.Env):
 
         self.hz = 50
         self.sim, self.world, self.ctrl = self.initialize_simulation(self.simulation_app)
+        from omni.isaac.core.utils.types import ArticulationAction
+        self.ArticulationAction = ArticulationAction
+        self._drive_joint_indices = np.array([
+            self.ctrl.get_dof_index("Wheel__Knuckle__Front_Left"),
+            self.ctrl.get_dof_index("Wheel__Knuckle__Front_Right"),
+            self.ctrl.get_dof_index("Wheel__Upright__Rear_Left"),
+            self.ctrl.get_dof_index("Wheel__Upright__Rear_Right"),
+        ])
+        self._steer_joint_indices = np.array([
+            self.ctrl.get_dof_index("Knuckle__Upright__Front_Left"),
+            self.ctrl.get_dof_index("Knuckle__Upright__Front_Right"),
+        ])
 
         self._step = None
         
@@ -111,8 +125,6 @@ class IsaacCar(gym.Env):
     
     #TODO change update frequency from 60hz to 50hz
     def step(self, action_):
-        from omni.isaac.core.utils.types import ArticulationAction
-       
         action_ = np.array(action_, dtype=np.float32)
         self.action_buffer.append(action_)
    
@@ -125,24 +137,18 @@ class IsaacCar(gym.Env):
         # convert action to true action in isaac sim
         action_isaac = np.array([action[0] * self.max_throttle, action[1]*self.max_steer + self.steer_bias], dtype=np.float32)
         
-        #apply the actionn
-        RL = self.ctrl.get_dof_index("Wheel__Upright__Rear_Left")
-        RR = self.ctrl.get_dof_index("Wheel__Upright__Rear_Right")
-        FL = self.ctrl.get_dof_index("Wheel__Knuckle__Front_Left")
-        FR = self.ctrl.get_dof_index("Wheel__Knuckle__Front_Right")
-
-        LSTR = self.ctrl.get_dof_index("Knuckle__Upright__Front_Left")
-        RSTR = self.ctrl.get_dof_index("Knuckle__Upright__Front_Right")
-
-        throttle = ArticulationAction(joint_efforts=np.array([action_isaac[0], action_isaac[0], action_isaac[0], action_isaac[0]]), joint_indices=np.array([FL, FR, RL, RR]))
+        throttle = self.ArticulationAction(
+            joint_efforts=np.full(4, action_isaac[0]),
+            joint_indices=self._drive_joint_indices,
+        )
         self.ctrl.apply_action(throttle)
-        # self.ctrl.get_articulation_controller().apply_action(throttle)
-        # str_cmd = cmd[i]
-        steer = ArticulationAction(joint_positions=np.array([action_isaac[1], action_isaac[1]]), joint_indices=np.array([LSTR, RSTR]))
-        self.ctrl.apply_action(steer)
-        # self.ctrl.get_articulation_controller().apply_action(steer)
 
-        # step twice since sim is running at 100hz
+        steer = self.ArticulationAction(
+            joint_positions=np.full(2, action_isaac[1]),
+            joint_indices=self._steer_joint_indices,
+        )
+        self.ctrl.apply_action(steer)
+
         for _ in range(self.hz//50):
             self.world.step(render = self.is_render)     
             self._step += 1
@@ -201,8 +207,8 @@ class IsaacCar(gym.Env):
 
         default_mass =  3.0 # base isaacsim mass
         
-        lower = default_mass * 0.7
-        upper = default_mass * 1.3
+        lower = 1.0
+        upper = 15.0
         new_mass = np.random.uniform(lower, upper)
 
         return new_mass
@@ -229,7 +235,7 @@ class IsaacCar(gym.Env):
         # print("Joint Frictions", self.ctrl.get_friction_coefficients())
         default_friction = 0.9 #base isaacsim friction
         lower = default_friction * 0.5
-        upper = default_friction * 1.1
+        upper = default_friction * 1.5
         new_friction = np.random.uniform(lower, upper)
         
         return new_friction
@@ -250,13 +256,13 @@ class IsaacCar(gym.Env):
     def generate_new_max_steering(self):
         # print("[Warn] Max Steering Generation Not Defined for Simulator Type")
         lower = 0.15
-        upper = 0.36
+        upper = 0.5
         max_steer = np.random.uniform(lower, upper)
         return max_steer
     
     def generate_new_steering_bias(self):
         lower = 0.0
-        upper = 0.01
+        upper = 0.04
         bias = np.random.uniform(lower, upper)
         return bias
     
