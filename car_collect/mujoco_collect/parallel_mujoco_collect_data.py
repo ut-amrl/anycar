@@ -45,9 +45,9 @@ DEFAULT_PURE_PURSUIT_MAX_KP = 10.0
 DEFAULT_PURE_PURSUIT_MIN_KD = 0.5
 DEFAULT_PURE_PURSUIT_MAX_KD = 1.5
 
-DEFAULT_OPEN_LOOP_MIN_THROTTLE = 0.0
-DEFAULT_OPEN_LOOP_MAX_THROTTLE = 1.0
-DEFAULT_OPEN_LOOP_THROTTLE_SEGMENTS = 8
+DEFAULT_OPEN_LOOP_MIN_VEL = -2.0
+DEFAULT_OPEN_LOOP_MAX_VEL = 5.0
+DEFAULT_OPEN_LOOP_VEL_SEGMENTS = 8
 DEFAULT_OPEN_LOOP_STEER_STEP_STD = 0.03
 DEFAULT_OPEN_LOOP_STEER_DAMPING = 0.985
 
@@ -70,18 +70,18 @@ def sample_int_range(rng: np.random.Generator, lo: int, hi: int) -> int:
     return int(rng.uniform(lo, hi))
 
 
-def generate_bezier_throttle_commands(
+def generate_bezier_velocity_commands(
     simend: int,
-    min_throttle: float,
-    max_throttle: float,
+    min_vel: float,
+    max_vel: float,
     num_segments: int,
     rng: np.random.Generator,
 ) -> np.ndarray:
     commands = np.zeros(simend, dtype=np.float32)
     num_segments = max(1, int(num_segments))
-    span = max_throttle - min_throttle
+    span = max_vel - min_vel
     segment_edges = np.linspace(0, simend, num_segments + 1, dtype=np.int64)
-    knots = rng.uniform(min_throttle, max_throttle, size=num_segments + 1)
+    knots = rng.uniform(min_vel, max_vel, size=num_segments + 1)
 
     for segment_id in range(num_segments):
         start = int(segment_edges[segment_id])
@@ -91,8 +91,8 @@ def generate_bezier_throttle_commands(
 
         p0 = knots[segment_id]
         p3 = knots[segment_id + 1]
-        p1 = np.clip(p0 + rng.uniform(-0.5, 0.5) * span, min_throttle, max_throttle)
-        p2 = np.clip(p3 + rng.uniform(-0.5, 0.5) * span, min_throttle, max_throttle)
+        p1 = np.clip(p0 + rng.uniform(-0.5, 0.5) * span, min_vel, max_vel)
+        p2 = np.clip(p3 + rng.uniform(-0.5, 0.5) * span, min_vel, max_vel)
         u = np.linspace(0.0, 1.0, end - start, endpoint=False)
         commands[start:end] = (
             (1.0 - u) ** 3 * p0
@@ -170,7 +170,7 @@ def log_data(dataset, env, action0_to_log, steer_to_log, target_pos=None):
         """Log SE(3) state plus the two collector action channels.
 
         In pure-pursuit mode, action0_to_log is target velocity in m/s.
-        In open-loop mode, action0_to_log is the normalized throttle command.
+        In open-loop mode, action0_to_log is target velocity in m/s.
         steer_to_log is normalized steering in [-1, 1].
         """
         dataset.data_logs["xpos_x"].append(env.world.pose[0])
@@ -236,11 +236,11 @@ def rollout(id, simend, render, debug_plots, datadir, args):
 
     controller = ppcontrol
     trajectory = change_track(scale, direction)
-    throttle_commands = generate_bezier_throttle_commands(
+    target_velocity_commands = generate_bezier_velocity_commands(
         simend,
-        args.open_loop_min_throttle,
-        args.open_loop_max_throttle,
-        args.open_loop_throttle_segments,
+        args.open_loop_min_vel,
+        args.open_loop_max_vel,
+        args.open_loop_vel_segments,
         rng,
     )
     steer_commands = generate_random_walk_steer_commands(
@@ -259,8 +259,13 @@ def rollout(id, simend, render, debug_plots, datadir, args):
     for t in tqdm(range(simend)):
 
         if args.control_mode == "open-loop":
-            action = np.array([throttle_commands[t], steer_commands[t]], dtype=np.float32)
-            action0_to_log = float(action[0])
+            target_vel = float(target_velocity_commands[t])
+            err_vel = target_vel - env.world.lin_vel[0]
+            throttle = kp * err_vel + kd * (err_vel - last_err_vel)
+            throttle /= env.world.max_throttle
+            last_err_vel = err_vel
+            action = np.array([throttle, steer_commands[t]], dtype=np.float32)
+            action0_to_log = target_vel
             steer_to_log = float(np.clip(action[1], -1.0, 1.0))
             target_pos = None
         else:
@@ -345,9 +350,18 @@ if __name__ == "__main__":
     parser.add_argument("--pure-pursuit-max-kp", type=float, default=DEFAULT_PURE_PURSUIT_MAX_KP)
     parser.add_argument("--pure-pursuit-min-kd", type=float, default=DEFAULT_PURE_PURSUIT_MIN_KD)
     parser.add_argument("--pure-pursuit-max-kd", type=float, default=DEFAULT_PURE_PURSUIT_MAX_KD)
-    parser.add_argument("--open-loop-min-throttle", type=float, default=DEFAULT_OPEN_LOOP_MIN_THROTTLE)
-    parser.add_argument("--open-loop-max-throttle", type=float, default=DEFAULT_OPEN_LOOP_MAX_THROTTLE)
-    parser.add_argument("--open-loop-throttle-segments", type=int, default=DEFAULT_OPEN_LOOP_THROTTLE_SEGMENTS)
+    parser.add_argument(
+        "--open-loop-min-vel",
+        dest="open_loop_min_vel", type=float, default=DEFAULT_OPEN_LOOP_MIN_VEL,
+    )
+    parser.add_argument(
+        "--open-loop-max-vel",
+        dest="open_loop_max_vel", type=float, default=DEFAULT_OPEN_LOOP_MAX_VEL,
+    )
+    parser.add_argument(
+        "--open-loop-vel-segments",
+        dest="open_loop_vel_segments", type=int, default=DEFAULT_OPEN_LOOP_VEL_SEGMENTS,
+    )
     parser.add_argument("--open-loop-steer-step-std", type=float, default=DEFAULT_OPEN_LOOP_STEER_STEP_STD)
     parser.add_argument("--open-loop-steer-damping", type=float, default=DEFAULT_OPEN_LOOP_STEER_DAMPING)
     parser.add_argument("--wheelbase", type=float, default=DEFAULT_WHEELBASE)
@@ -366,8 +380,8 @@ if __name__ == "__main__":
     parser.add_argument("--delay-min", type=int, default=DEFAULT_DELAY_RANGE[0])
     parser.add_argument("--delay-max", type=int, default=DEFAULT_DELAY_RANGE[1])
     args = parser.parse_args()
-    if args.open_loop_min_throttle > args.open_loop_max_throttle:
-        raise ValueError("--open-loop-min-throttle must be <= --open-loop-max-throttle")
+    if args.open_loop_min_vel > args.open_loop_max_vel:
+        raise ValueError("--open-loop-min-vel must be <= --open-loop-max-vel")
     if args.track_min_scale >= args.track_max_scale:
         raise ValueError("--track-min-scale must be < --track-max-scale")
     for min_name, max_name in (

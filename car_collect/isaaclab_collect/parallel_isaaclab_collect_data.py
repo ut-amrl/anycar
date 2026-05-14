@@ -76,9 +76,9 @@ DEFAULT_WHEEL_DYNAMIC_FRICTION_RANGE = (DEFAULT_WHEEL_DYNAMIC_FRICTION, DEFAULT_
 
 DEFAULT_SPEED_FILTER_ALPHA = 0.25
 DEFAULT_ACTION_FILTER_ALPHA = 0.25
-DEFAULT_OPEN_LOOP_MIN_THROTTLE = 0.0
-DEFAULT_OPEN_LOOP_MAX_THROTTLE = None
-DEFAULT_OPEN_LOOP_THROTTLE_SEGMENTS = 8
+DEFAULT_OPEN_LOOP_MIN_VEL = -2.0
+DEFAULT_OPEN_LOOP_MAX_VEL = 5.0
+DEFAULT_OPEN_LOOP_VEL_SEGMENTS = 8
 DEFAULT_OPEN_LOOP_STEER_STEP_STD = 0.015
 DEFAULT_OPEN_LOOP_STEER_DAMPING = 0.985
 DEFAULT_THROTTLE_NOISE = 0.0
@@ -119,23 +119,23 @@ def generate_target_velocities(totaltime: int, lowervel: float, uppervel: float)
     return np.clip(spline(x_total), lowervel, uppervel).astype(np.float32)
 
 
-def generate_bezier_throttle_commands(
+def generate_bezier_velocity_commands(
     num_envs: int,
     simend: int,
-    min_throttle: float | np.ndarray,
-    max_throttle: float | np.ndarray,
+    min_vel: float | np.ndarray,
+    max_vel: float | np.ndarray,
     num_segments: int,
     rng: np.random.Generator,
 ) -> np.ndarray:
     commands = np.zeros((num_envs, simend), dtype=np.float32)
     num_segments = max(1, num_segments)
-    min_throttle = np.broadcast_to(np.asarray(min_throttle, dtype=np.float32), (num_envs,))
-    max_throttle = np.broadcast_to(np.asarray(max_throttle, dtype=np.float32), (num_envs,))
+    min_vel = np.broadcast_to(np.asarray(min_vel, dtype=np.float32), (num_envs,))
+    max_vel = np.broadcast_to(np.asarray(max_vel, dtype=np.float32), (num_envs,))
     segment_edges = np.linspace(0, simend, num_segments + 1, dtype=np.int64)
 
     for env_id in range(num_envs):
-        lo = float(min_throttle[env_id])
-        hi = float(max_throttle[env_id])
+        lo = float(min_vel[env_id])
+        hi = float(max_vel[env_id])
         span = hi - lo
         knots = rng.uniform(lo, hi, size=num_segments + 1)
         for segment_id in range(num_segments):
@@ -354,9 +354,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wheel-dynamic-friction-max", type=float, default=DEFAULT_WHEEL_DYNAMIC_FRICTION_RANGE[1])
     parser.add_argument("--speed-filter-alpha", type=float, default=DEFAULT_SPEED_FILTER_ALPHA)
     parser.add_argument("--action-filter-alpha", type=float, default=DEFAULT_ACTION_FILTER_ALPHA)
-    parser.add_argument("--open-loop-min-throttle", type=float, default=DEFAULT_OPEN_LOOP_MIN_THROTTLE)
-    parser.add_argument("--open-loop-max-throttle", type=float, default=DEFAULT_OPEN_LOOP_MAX_THROTTLE)
-    parser.add_argument("--open-loop-throttle-segments", type=int, default=DEFAULT_OPEN_LOOP_THROTTLE_SEGMENTS)
+    parser.add_argument(
+        "--open-loop-min-vel",
+        dest="open_loop_min_vel", type=float, default=DEFAULT_OPEN_LOOP_MIN_VEL,
+    )
+    parser.add_argument(
+        "--open-loop-max-vel",
+        dest="open_loop_max_vel", type=float, default=DEFAULT_OPEN_LOOP_MAX_VEL,
+    )
+    parser.add_argument(
+        "--open-loop-vel-segments",
+        dest="open_loop_vel_segments", type=int, default=DEFAULT_OPEN_LOOP_VEL_SEGMENTS,
+    )
     parser.add_argument("--open-loop-steer-step-std", type=float, default=DEFAULT_OPEN_LOOP_STEER_STEP_STD)
     parser.add_argument("--open-loop-steer-damping", type=float, default=DEFAULT_OPEN_LOOP_STEER_DAMPING)
     parser.add_argument("--throttle-noise", type=float, default=DEFAULT_THROTTLE_NOISE)
@@ -391,11 +400,8 @@ def parse_args() -> argparse.Namespace:
         DEFAULT_WHEEL_DYNAMIC_FRICTION,
     )
 
-    if args.open_loop_max_throttle is None:
-        if args.open_loop_min_throttle > args.max_throttle_min:
-            raise ValueError("--open-loop-min-throttle must be <= --max-throttle-min when --open-loop-max-throttle is omitted")
-    elif args.open_loop_min_throttle > args.open_loop_max_throttle:
-        raise ValueError("--open-loop-min-throttle must be <= --open-loop-max-throttle")
+    if args.open_loop_min_vel > args.open_loop_max_vel:
+        raise ValueError("--open-loop-min-vel must be <= --open-loop-max-vel")
     for min_name, max_name in (
         ("max_throttle_min", "max_throttle_max"),
         ("max_steer_min", "max_steer_max"),
@@ -572,16 +578,13 @@ def main() -> None:
         kp = torch.as_tensor(kp_np, device=sim.device)
         kd = torch.as_tensor(kd_np, device=sim.device)
         if args.control_mode == "open-loop":
-            open_loop_max_throttle = (
-                max_throttle_np if args.open_loop_max_throttle is None else args.open_loop_max_throttle
-            )
-            throttle_commands = torch.as_tensor(
-                generate_bezier_throttle_commands(
+            target_velocity_commands = torch.as_tensor(
+                generate_bezier_velocity_commands(
                     args.num_envs,
                     args.simend,
-                    args.open_loop_min_throttle,
-                    open_loop_max_throttle,
-                    args.open_loop_throttle_segments,
+                    args.open_loop_min_vel,
+                    args.open_loop_max_vel,
+                    args.open_loop_vel_segments,
                     episode_rng,
                 ),
                 device=sim.device,
@@ -638,12 +641,13 @@ def main() -> None:
             )
 
             if args.control_mode == "open-loop":
-                throttle = throttle_commands[:, t]
+                target_vel = target_velocity_commands[:, t]
+                err_vel = target_vel - filtered_forward_speed
+                throttle = kp * err_vel + kd * (err_vel - last_err_vel)
+                throttle = torch.clamp(throttle, -max_throttle, max_throttle)
+                last_err_vel = err_vel
                 steer = steer_commands[:, t]
-                # Open-loop has no explicit velocity command. We log the sampled
-                # effort as the action column. NOTE: this column is NOT in m/s
-                # in open-loop mode.
-                target_vel_to_log = throttle
+                target_vel_to_log = target_vel
                 target_steer_norm_to_log = torch.clamp(steer / max_steer, -1.0, 1.0)
             else:
                 throttle, steer, progress_idx, last_err_vel = pure_pursuit_actions(
