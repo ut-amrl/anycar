@@ -37,6 +37,54 @@ BIN_COLUMNS = [
     "throttle", "steer",
 ]
 
+# Tunable collection defaults. Keep these near the top so data-generation
+# sweeps can change one block instead of hunting through parser definitions.
+DEFAULT_NUM_ENVS = 16
+DEFAULT_EPISODES = 1
+DEFAULT_SIMEND = 2000
+DEFAULT_USD_NAME = "F1Tenth_lecar.usd"
+DEFAULT_CONTROL_MODE = "open-loop"
+DEFAULT_DT = 0.02
+DEFAULT_PHYSICS_DT = 0.01
+DEFAULT_ENV_SPACING = 0.0
+
+DEFAULT_TRACK_POINTS = 400
+DEFAULT_LOOKAHEAD = 4.0
+DEFAULT_LOWER_VEL = 0.7
+DEFAULT_UPPER_VEL = 2.0
+DEFAULT_MIN_TRACK_SCALE = 1
+DEFAULT_MAX_TRACK_SCALE = 5
+
+DEFAULT_MIN_KP = 6.0
+DEFAULT_MAX_KP = 10.0
+DEFAULT_MIN_KD = 0.5
+DEFAULT_MAX_KD = 1.5
+
+DEFAULT_WHEELBASE = 0.32
+DEFAULT_MAX_THROTTLE = 1.0
+DEFAULT_MAX_THROTTLE_RANGE = (DEFAULT_MAX_THROTTLE, DEFAULT_MAX_THROTTLE)
+DEFAULT_MAX_STEER = 0.5
+DEFAULT_MAX_STEER_RANGE = (DEFAULT_MAX_STEER, DEFAULT_MAX_STEER)
+DEFAULT_STEER_BIAS = 0.0
+DEFAULT_STEER_BIAS_RANGE = (DEFAULT_STEER_BIAS, DEFAULT_STEER_BIAS)
+DEFAULT_GROUND_STATIC_FRICTION = 0.7
+DEFAULT_GROUND_DYNAMIC_FRICTION = 0.7
+DEFAULT_WHEEL_STATIC_FRICTION = 1.0
+DEFAULT_WHEEL_STATIC_FRICTION_RANGE = (DEFAULT_WHEEL_STATIC_FRICTION, DEFAULT_WHEEL_STATIC_FRICTION)
+DEFAULT_WHEEL_DYNAMIC_FRICTION = 1.0
+DEFAULT_WHEEL_DYNAMIC_FRICTION_RANGE = (DEFAULT_WHEEL_DYNAMIC_FRICTION, DEFAULT_WHEEL_DYNAMIC_FRICTION)
+
+DEFAULT_SPEED_FILTER_ALPHA = 0.25
+DEFAULT_ACTION_FILTER_ALPHA = 0.25
+DEFAULT_OPEN_LOOP_MIN_THROTTLE = 0.0
+DEFAULT_OPEN_LOOP_MAX_THROTTLE = None
+DEFAULT_OPEN_LOOP_THROTTLE_SEGMENTS = 8
+DEFAULT_OPEN_LOOP_STEER_STEP_STD = 0.015
+DEFAULT_OPEN_LOOP_STEER_DAMPING = 0.985
+DEFAULT_THROTTLE_NOISE = 0.0
+DEFAULT_STEER_NOISE = 0.0
+DEFAULT_SEED = 0
+
 DRIVE_JOINTS = [
     "Wheel__Knuckle__Front_Left",
     "Wheel__Knuckle__Front_Right",
@@ -74,18 +122,22 @@ def generate_target_velocities(totaltime: int, lowervel: float, uppervel: float)
 def generate_bezier_throttle_commands(
     num_envs: int,
     simend: int,
-    min_throttle: float,
-    max_throttle: float,
+    min_throttle: float | np.ndarray,
+    max_throttle: float | np.ndarray,
     num_segments: int,
     rng: np.random.Generator,
 ) -> np.ndarray:
     commands = np.zeros((num_envs, simend), dtype=np.float32)
     num_segments = max(1, num_segments)
-    span = max_throttle - min_throttle
+    min_throttle = np.broadcast_to(np.asarray(min_throttle, dtype=np.float32), (num_envs,))
+    max_throttle = np.broadcast_to(np.asarray(max_throttle, dtype=np.float32), (num_envs,))
     segment_edges = np.linspace(0, simend, num_segments + 1, dtype=np.int64)
 
     for env_id in range(num_envs):
-        knots = rng.uniform(min_throttle, max_throttle, size=num_segments + 1)
+        lo = float(min_throttle[env_id])
+        hi = float(max_throttle[env_id])
+        span = hi - lo
+        knots = rng.uniform(lo, hi, size=num_segments + 1)
         for segment_id in range(num_segments):
             start = int(segment_edges[segment_id])
             end = int(segment_edges[segment_id + 1])
@@ -94,8 +146,8 @@ def generate_bezier_throttle_commands(
 
             p0 = knots[segment_id]
             p3 = knots[segment_id + 1]
-            p1 = np.clip(p0 + rng.uniform(-0.5, 0.5) * span, min_throttle, max_throttle)
-            p2 = np.clip(p3 + rng.uniform(-0.5, 0.5) * span, min_throttle, max_throttle)
+            p1 = np.clip(p0 + rng.uniform(-0.5, 0.5) * span, lo, hi)
+            p2 = np.clip(p3 + rng.uniform(-0.5, 0.5) * span, lo, hi)
             u = np.linspace(0.0, 1.0, end - start, endpoint=False)
             curve = (
                 (1.0 - u) ** 3 * p0
@@ -113,22 +165,42 @@ def generate_bezier_throttle_commands(
 def generate_random_walk_steer_commands(
     num_envs: int,
     simend: int,
-    max_steer: float,
+    max_steer: float | np.ndarray,
     step_std: float,
     damping: float,
     rng: np.random.Generator,
 ) -> np.ndarray:
     commands = np.zeros((num_envs, simend), dtype=np.float32)
     damping = float(np.clip(damping, 0.0, 1.0))
+    max_steer = np.broadcast_to(np.asarray(max_steer, dtype=np.float32), (num_envs,))
 
     for env_id in range(num_envs):
-        steer = rng.uniform(-0.2 * max_steer, 0.2 * max_steer)
+        limit = float(max_steer[env_id])
+        steer = rng.uniform(-0.2 * limit, 0.2 * limit)
         for t in range(simend):
             steer = damping * steer + rng.normal(0.0, step_std)
-            steer = float(np.clip(steer, -max_steer, max_steer))
+            steer = float(np.clip(steer, -limit, limit))
             commands[env_id, t] = steer
 
     return commands
+
+
+def sample_uniform_np(num_envs: int, lo: float, hi: float,
+                      rng: np.random.Generator) -> np.ndarray:
+    return rng.uniform(lo, hi, size=num_envs).astype(np.float32)
+
+
+def maybe_apply_legacy_fixed_arg(args: argparse.Namespace, scalar_name: str,
+                                 min_name: str, max_name: str,
+                                 default_scalar: float) -> None:
+    """Keep legacy scalar flags meaningful when range flags are untouched."""
+    if not np.isclose(getattr(args, scalar_name), default_scalar):
+        default_range = (default_scalar, default_scalar)
+        current_range = (getattr(args, min_name), getattr(args, max_name))
+        if np.allclose(current_range, default_range):
+            value = getattr(args, scalar_name)
+            setattr(args, min_name, value)
+            setattr(args, max_name, value)
 
 
 def yaw_to_quat_wxyz(yaw: torch.Tensor) -> torch.Tensor:
@@ -243,51 +315,96 @@ def parse_args() -> argparse.Namespace:
     from isaaclab.app import AppLauncher
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num-envs", type=int, default=16)
-    parser.add_argument("--episodes", type=int, default=1)
-    parser.add_argument("--simend", type=int, default=2000)
+    parser.add_argument("--num-envs", type=int, default=DEFAULT_NUM_ENVS)
+    parser.add_argument("--episodes", type=int, default=DEFAULT_EPISODES)
+    parser.add_argument("--simend", type=int, default=DEFAULT_SIMEND)
     parser.add_argument("--data-dir", type=str, default=None)
-    parser.add_argument("--usd-name", type=str, default="F1Tenth_lecar.usd")
-    parser.add_argument("--control-mode", choices=("open-loop", "pure-pursuit"), default="open-loop")
-    parser.add_argument("--dt", type=float, default=0.02)
-    parser.add_argument("--physics-dt", type=float, default=0.01)
-    parser.add_argument("--env-spacing", type=float, default=0.0)
-    parser.add_argument("--track-points", type=int, default=400)
-    parser.add_argument("--lookahead", type=float, default=4.0)
-    parser.add_argument("--lower-vel", type=float, default=0.7)
-    parser.add_argument("--upper-vel", type=float, default=2.0)
-    parser.add_argument("--min-track-scale", type=int, default=1)
-    parser.add_argument("--max-track-scale", type=int, default=5)
-    parser.add_argument("--min-kp", type=float, default=6.0)
-    parser.add_argument("--max-kp", type=float, default=10.0)
-    parser.add_argument("--min-kd", type=float, default=0.5)
-    parser.add_argument("--max-kd", type=float, default=1.5)
-    parser.add_argument("--wheelbase", type=float, default=0.32)
-    parser.add_argument("--max-throttle", type=float, default=1.0)
-    parser.add_argument("--max-steer", type=float, default=0.5)
-    parser.add_argument("--steer-bias", type=float, default=0.0)
-    parser.add_argument("--ground-static-friction", type=float, default=0.7)
-    parser.add_argument("--ground-dynamic-friction", type=float, default=0.7)
-    parser.add_argument("--wheel-static-friction", type=float, default=1.0)
-    parser.add_argument("--wheel-dynamic-friction", type=float, default=1.0)
-    parser.add_argument("--speed-filter-alpha", type=float, default=0.25)
-    parser.add_argument("--action-filter-alpha", type=float, default=0.25)
-    parser.add_argument("--open-loop-min-throttle", type=float, default=0.0)
-    parser.add_argument("--open-loop-max-throttle", type=float, default=None)
-    parser.add_argument("--open-loop-throttle-segments", type=int, default=8)
-    parser.add_argument("--open-loop-steer-step-std", type=float, default=0.015)
-    parser.add_argument("--open-loop-steer-damping", type=float, default=0.985)
-    parser.add_argument("--throttle-noise", type=float, default=0.0)
-    parser.add_argument("--steer-noise", type=float, default=0.0)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--usd-name", type=str, default=DEFAULT_USD_NAME)
+    parser.add_argument("--control-mode", choices=("open-loop", "pure-pursuit"), default=DEFAULT_CONTROL_MODE)
+    parser.add_argument("--dt", type=float, default=DEFAULT_DT)
+    parser.add_argument("--physics-dt", type=float, default=DEFAULT_PHYSICS_DT)
+    parser.add_argument("--env-spacing", type=float, default=DEFAULT_ENV_SPACING)
+    parser.add_argument("--track-points", type=int, default=DEFAULT_TRACK_POINTS)
+    parser.add_argument("--lookahead", type=float, default=DEFAULT_LOOKAHEAD)
+    parser.add_argument("--lower-vel", type=float, default=DEFAULT_LOWER_VEL)
+    parser.add_argument("--upper-vel", type=float, default=DEFAULT_UPPER_VEL)
+    parser.add_argument("--min-track-scale", type=int, default=DEFAULT_MIN_TRACK_SCALE)
+    parser.add_argument("--max-track-scale", type=int, default=DEFAULT_MAX_TRACK_SCALE)
+    parser.add_argument("--min-kp", type=float, default=DEFAULT_MIN_KP)
+    parser.add_argument("--max-kp", type=float, default=DEFAULT_MAX_KP)
+    parser.add_argument("--min-kd", type=float, default=DEFAULT_MIN_KD)
+    parser.add_argument("--max-kd", type=float, default=DEFAULT_MAX_KD)
+    parser.add_argument("--wheelbase", type=float, default=DEFAULT_WHEELBASE)
+    parser.add_argument("--max-throttle", type=float, default=DEFAULT_MAX_THROTTLE)
+    parser.add_argument("--max-throttle-min", type=float, default=DEFAULT_MAX_THROTTLE_RANGE[0])
+    parser.add_argument("--max-throttle-max", type=float, default=DEFAULT_MAX_THROTTLE_RANGE[1])
+    parser.add_argument("--max-steer", type=float, default=DEFAULT_MAX_STEER)
+    parser.add_argument("--max-steer-min", type=float, default=DEFAULT_MAX_STEER_RANGE[0])
+    parser.add_argument("--max-steer-max", type=float, default=DEFAULT_MAX_STEER_RANGE[1])
+    parser.add_argument("--steer-bias", type=float, default=DEFAULT_STEER_BIAS)
+    parser.add_argument("--steer-bias-min", type=float, default=DEFAULT_STEER_BIAS_RANGE[0])
+    parser.add_argument("--steer-bias-max", type=float, default=DEFAULT_STEER_BIAS_RANGE[1])
+    parser.add_argument("--ground-static-friction", type=float, default=DEFAULT_GROUND_STATIC_FRICTION)
+    parser.add_argument("--ground-dynamic-friction", type=float, default=DEFAULT_GROUND_DYNAMIC_FRICTION)
+    parser.add_argument("--wheel-static-friction", type=float, default=DEFAULT_WHEEL_STATIC_FRICTION)
+    parser.add_argument("--wheel-static-friction-min", type=float, default=DEFAULT_WHEEL_STATIC_FRICTION_RANGE[0])
+    parser.add_argument("--wheel-static-friction-max", type=float, default=DEFAULT_WHEEL_STATIC_FRICTION_RANGE[1])
+    parser.add_argument("--wheel-dynamic-friction", type=float, default=DEFAULT_WHEEL_DYNAMIC_FRICTION)
+    parser.add_argument("--wheel-dynamic-friction-min", type=float, default=DEFAULT_WHEEL_DYNAMIC_FRICTION_RANGE[0])
+    parser.add_argument("--wheel-dynamic-friction-max", type=float, default=DEFAULT_WHEEL_DYNAMIC_FRICTION_RANGE[1])
+    parser.add_argument("--speed-filter-alpha", type=float, default=DEFAULT_SPEED_FILTER_ALPHA)
+    parser.add_argument("--action-filter-alpha", type=float, default=DEFAULT_ACTION_FILTER_ALPHA)
+    parser.add_argument("--open-loop-min-throttle", type=float, default=DEFAULT_OPEN_LOOP_MIN_THROTTLE)
+    parser.add_argument("--open-loop-max-throttle", type=float, default=DEFAULT_OPEN_LOOP_MAX_THROTTLE)
+    parser.add_argument("--open-loop-throttle-segments", type=int, default=DEFAULT_OPEN_LOOP_THROTTLE_SEGMENTS)
+    parser.add_argument("--open-loop-steer-step-std", type=float, default=DEFAULT_OPEN_LOOP_STEER_STEP_STD)
+    parser.add_argument("--open-loop-steer-damping", type=float, default=DEFAULT_OPEN_LOOP_STEER_DAMPING)
+    parser.add_argument("--throttle-noise", type=float, default=DEFAULT_THROTTLE_NOISE)
+    parser.add_argument("--steer-noise", type=float, default=DEFAULT_STEER_NOISE)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args()
     if not hasattr(args, "headless"):
         args.headless = True
+
+    maybe_apply_legacy_fixed_arg(
+        args, "max_throttle", "max_throttle_min", "max_throttle_max", DEFAULT_MAX_THROTTLE
+    )
+    maybe_apply_legacy_fixed_arg(
+        args, "max_steer", "max_steer_min", "max_steer_max", DEFAULT_MAX_STEER
+    )
+    maybe_apply_legacy_fixed_arg(
+        args, "steer_bias", "steer_bias_min", "steer_bias_max", DEFAULT_STEER_BIAS
+    )
+    maybe_apply_legacy_fixed_arg(
+        args,
+        "wheel_static_friction",
+        "wheel_static_friction_min",
+        "wheel_static_friction_max",
+        DEFAULT_WHEEL_STATIC_FRICTION,
+    )
+    maybe_apply_legacy_fixed_arg(
+        args,
+        "wheel_dynamic_friction",
+        "wheel_dynamic_friction_min",
+        "wheel_dynamic_friction_max",
+        DEFAULT_WHEEL_DYNAMIC_FRICTION,
+    )
+
     if args.open_loop_max_throttle is None:
-        args.open_loop_max_throttle = args.max_throttle
-    if args.open_loop_min_throttle > args.open_loop_max_throttle:
+        if args.open_loop_min_throttle > args.max_throttle_min:
+            raise ValueError("--open-loop-min-throttle must be <= --max-throttle-min when --open-loop-max-throttle is omitted")
+    elif args.open_loop_min_throttle > args.open_loop_max_throttle:
         raise ValueError("--open-loop-min-throttle must be <= --open-loop-max-throttle")
+    for min_name, max_name in (
+        ("max_throttle_min", "max_throttle_max"),
+        ("max_steer_min", "max_steer_max"),
+        ("steer_bias_min", "steer_bias_max"),
+        ("wheel_static_friction_min", "wheel_static_friction_max"),
+        ("wheel_dynamic_friction_min", "wheel_dynamic_friction_max"),
+    ):
+        if getattr(args, min_name) > getattr(args, max_name):
+            raise ValueError(f"--{min_name.replace('_', '-')} must be <= --{max_name.replace('_', '-')}")
     if args.dt < args.physics_dt:
         raise ValueError(f"--dt ({args.dt}) must be >= --physics-dt ({args.physics_dt})")
     decimation = args.dt / args.physics_dt
@@ -361,8 +478,8 @@ def main() -> None:
         actuators={
             "drive": IdealPDActuatorCfg(
                 joint_names_expr=DRIVE_JOINTS,
-                effort_limit=args.max_throttle,
-                effort_limit_sim=args.max_throttle,
+                effort_limit=max(args.max_throttle, args.max_throttle_max),
+                effort_limit_sim=max(args.max_throttle, args.max_throttle_max),
                 stiffness=0.0,
                 damping=0.0,
             ),
@@ -381,9 +498,31 @@ def main() -> None:
     origins = scene.env_origins.to(device=sim.device, dtype=torch.float32)
     sim.reset()
     scene.update(sim.cfg.dt)
+    wheel_rng = np.random.default_rng(args.seed + 17)
+    wheel_static_friction_np = sample_uniform_np(
+        args.num_envs,
+        args.wheel_static_friction_min,
+        args.wheel_static_friction_max,
+        wheel_rng,
+    )
+    wheel_dynamic_friction_np = sample_uniform_np(
+        args.num_envs,
+        args.wheel_dynamic_friction_min,
+        args.wheel_dynamic_friction_max,
+        wheel_rng,
+    )
     material_props = cars.root_physx_view.get_material_properties()
-    material_props[..., 0] = args.wheel_static_friction
-    material_props[..., 1] = args.wheel_dynamic_friction
+    wheel_static_friction = torch.as_tensor(
+        wheel_static_friction_np, device=material_props.device, dtype=material_props.dtype
+    )
+    wheel_dynamic_friction = torch.as_tensor(
+        wheel_dynamic_friction_np, device=material_props.device, dtype=material_props.dtype
+    )
+    while wheel_static_friction.ndim < material_props[..., 0].ndim:
+        wheel_static_friction = wheel_static_friction.unsqueeze(-1)
+        wheel_dynamic_friction = wheel_dynamic_friction.unsqueeze(-1)
+    material_props[..., 0] = wheel_static_friction
+    material_props[..., 1] = wheel_dynamic_friction
     material_props[..., 2] = 0.0
     cars.root_physx_view.set_material_properties(material_props, torch.arange(args.num_envs, device="cpu"))
     print("Scene reset complete", flush=True)
@@ -393,13 +532,25 @@ def main() -> None:
     drive_ids = torch.as_tensor(drive_ids, device=sim.device, dtype=torch.long)
     steer_ids = torch.as_tensor(steer_ids, device=sim.device, dtype=torch.long)
 
-    max_throttle = torch.full((args.num_envs,), args.max_throttle, device=sim.device)
-    max_steer = torch.full((args.num_envs,), args.max_steer, device=sim.device)
     env_ids = torch.arange(args.num_envs, device=sim.device)
     rng = torch.Generator(device=sim.device)
     rng.manual_seed(args.seed)
 
     for episode in range(args.episodes):
+        episode_rng = np.random.default_rng(args.seed + 1009 * episode)
+        max_throttle_np = sample_uniform_np(
+            args.num_envs, args.max_throttle_min, args.max_throttle_max, episode_rng
+        )
+        max_steer_np = sample_uniform_np(
+            args.num_envs, args.max_steer_min, args.max_steer_max, episode_rng
+        )
+        steer_bias_np = sample_uniform_np(
+            args.num_envs, args.steer_bias_min, args.steer_bias_max, episode_rng
+        )
+        max_throttle = torch.as_tensor(max_throttle_np, device=sim.device)
+        max_steer = torch.as_tensor(max_steer_np, device=sim.device)
+        steer_bias = torch.as_tensor(steer_bias_np, device=sim.device)
+
         tracks_np = np.zeros((args.num_envs, args.track_points, 2), dtype=np.float32)
         target_velocities_np = np.zeros((args.num_envs, args.simend), dtype=np.float32)
         kp_np = np.zeros(args.num_envs, dtype=np.float32)
@@ -420,17 +571,18 @@ def main() -> None:
         target_velocities = torch.as_tensor(target_velocities_np, device=sim.device)
         kp = torch.as_tensor(kp_np, device=sim.device)
         kd = torch.as_tensor(kd_np, device=sim.device)
-        steer_bias = torch.full((args.num_envs,), args.steer_bias, device=sim.device)
         if args.control_mode == "open-loop":
-            command_rng = np.random.default_rng(args.seed + 1009 * episode)
+            open_loop_max_throttle = (
+                max_throttle_np if args.open_loop_max_throttle is None else args.open_loop_max_throttle
+            )
             throttle_commands = torch.as_tensor(
                 generate_bezier_throttle_commands(
                     args.num_envs,
                     args.simend,
                     args.open_loop_min_throttle,
-                    args.open_loop_max_throttle,
+                    open_loop_max_throttle,
                     args.open_loop_throttle_segments,
-                    command_rng,
+                    episode_rng,
                 ),
                 device=sim.device,
             )
@@ -438,10 +590,10 @@ def main() -> None:
                 generate_random_walk_steer_commands(
                     args.num_envs,
                     args.simend,
-                    args.max_steer,
+                    max_steer_np,
                     args.open_loop_steer_step_std,
                     args.open_loop_steer_damping,
-                    command_rng,
+                    episode_rng,
                 ),
                 device=sim.device,
             )
@@ -488,6 +640,11 @@ def main() -> None:
             if args.control_mode == "open-loop":
                 throttle = throttle_commands[:, t]
                 steer = steer_commands[:, t]
+                # Open-loop has no explicit velocity command. We log the sampled
+                # effort as the action column. NOTE: this column is NOT in m/s
+                # in open-loop mode.
+                target_vel_to_log = throttle
+                target_steer_norm_to_log = torch.clamp(steer / max_steer, -1.0, 1.0)
             else:
                 throttle, steer, progress_idx, last_err_vel = pure_pursuit_actions(
                     pos_w,
@@ -505,6 +662,13 @@ def main() -> None:
                     kd=kd,
                     last_err_vel=last_err_vel,
                 )
+                # Capture the SETPOINTS (what MPPI/planner emits), pre-filter,
+                # pre-noise. The sim is still driven by the PD-output throttle
+                # and filtered steer below, but the logged action mirrors what
+                # a deployment-time planner would output.
+                target_vel_to_log = target_velocities[:, t]                        # m/s
+                target_steer_norm_to_log = torch.clamp(steer / max_steer, -1.0, 1.0)
+
                 if args.throttle_noise > 0.0:
                     throttle = throttle + args.throttle_noise * torch.randn(
                         args.num_envs, device=sim.device, generator=rng
@@ -526,8 +690,8 @@ def main() -> None:
                     quat_w,
                     vel_w,
                     angvel_w,
-                    throttle[:, None],
-                    steer[:, None],
+                    target_vel_to_log[:, None],
+                    target_steer_norm_to_log[:, None],
                 ],
                 dim=1,
             )

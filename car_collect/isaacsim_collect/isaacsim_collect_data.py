@@ -149,17 +149,17 @@ def rollout(id, simend, render, debug_plots, datadir, env):
         if controller.name == "pure_pursuit":
 
             target_vel = action[0]
-            
+
             action[0] = kp * (target_vel - env.full_obs[7]) + kd * (target_vel - last_err_vel)
             action[0] /= env.max_throttle
-            
+
             last_err_vel = target_vel - env.full_obs[7]
         else:
             raise ValueError(f"Unknown Controller: {controller.name}")
 
         action = np.clip(action, env.action_space.low, env.action_space.high)
         # action = np.array([0., 0.])
-        actions.append(action) 
+        actions.append(action)
         log_data(dataset, env, action, controller)
 
         obs, reward, done, info = env.step(np.array(action))
